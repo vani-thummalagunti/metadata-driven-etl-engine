@@ -1,0 +1,102 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "factoryName": {
+      "type": "string",
+      "defaultValue": "adf-metadata-framework"
+    }
+  },
+  "resources": [
+    {
+      "name": "[concat(parameters('factoryName'), '/pl_master_dynamic_orchestrator')]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "properties": {
+        "description": "Dynamic metadata-driven pipeline: iterates over all registered active datasets, validates data quality in Databricks, routes bad records to quarantine, and updates central execution logs.",
+        "activities": [
+          {
+            "name": "Lookup_ActivePipelines",
+            "type": "Lookup",
+            "typeProperties": {
+              "source": {
+                "type": "SqlSource",
+                "sqlReaderStoredProcedureName": "dbo.sp_GetActivePipelines"
+              },
+              "dataset": {
+                "referenceName": "DS_MetadataDB",
+                "type": "DatasetReference"
+              },
+              "firstRowOnly": false
+            }
+          },
+          {
+            "name": "ForEach_PipelineExecution",
+            "type": "ForEach",
+            "dependsOn": [
+              {
+                "activity": "Lookup_ActivePipelines",
+                "dependencyConditions": ["Succeeded"]
+              }
+            ],
+            "typeProperties": {
+              "items": {
+                "value": "@activity('Lookup_ActivePipelines').output.value",
+                "type": "Expression"
+              },
+              "isSequential": false,
+              "batchCount": 5,
+              "activities": [
+                {
+                  "name": "Databricks_Generic_Processor",
+                  "type": "DatabricksNotebook",
+                  "typeProperties": {
+                    "notebookPath": "/Shared/Framework/generic_etl_processor",
+                    "baseParameters": {
+                      "pipeline_id": {
+                        "value": "@string(item().PipelineID)",
+                        "type": "Expression"
+                      },
+                      "pipeline_name": {
+                        "value": "@item().PipelineName",
+                        "type": "Expression"
+                      },
+                      "source_path": {
+                        "value": "@item().SourcePathOrQuery",
+                        "type": "Expression"
+                      },
+                      "target_table": {
+                        "value": "@item().TargetDeltaTable",
+                        "type": "Expression"
+                      },
+                      "primary_key": {
+                        "value": "@item().PrimaryKeyCol",
+                        "type": "Expression"
+                      },
+                      "watermark_val": {
+                        "value": "@item().LastWatermarkValue",
+                        "type": "Expression"
+                      },
+                      "dq_rules": {
+                        "value": "@item().DataQualityRulesJson",
+                        "type": "Expression"
+                      },
+                      "adf_run_id": {
+                        "value": "@pipeline().RunId",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+                  "linkedServiceName": {
+                    "referenceName": "LS_AzureDatabricks",
+                    "type": "LinkedServiceReference"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
